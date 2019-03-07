@@ -12,6 +12,7 @@ from music21 import *
 """
 
 
+
 MAX_OCTAVE = 7
 MAX_SUSTAIN = 3     # x 16th notes.
 MAX_VELOCITY = 127
@@ -189,38 +190,30 @@ class MacOSFile(object):
 
 
 def class_pars_fn(args):
-    print("ENTER")
-    folder, i = args
+    i, folder = args
     samples = glob(folder+"*.mid")
     class_data = []
     label = [0 if _ != i else 1 for _ in range(hm_classes)]
-    print(f"samples found for {i}: {len(samples)}")
+    if verbose: print(f"class {i}: found {len(samples)} samples.")
     for raw_file in samples:
+        if verbose: print(f"> working on: {raw_file}")
         samples = preproc_raw_file(raw_file)
         for sample in samples:
             class_data.append([sample, label])
 
     pickle_save(class_data, f"class{i+1}.pkl")
-    print(f"class {i} obtained: {len(class_data)} samples.")
+    if verbose: print(f"class {i}: obtained {len(class_data)} datas.")
 
 
+verbose = False
 if __name__ == '__main__':
 
     sample_folders = glob("samples/*/")     # todo : make this in-arg.
     hm_classes = len(sample_folders)
 
-    print("Classes found:", hm_classes, [(i,v) for i,v in enumerate(sample_folders)])
-
     with Pool(cpu_count()) as p:
-        print("enter pool")
-        #args = [(i,v) for i,v in enumerate(sample_folders)]
-        #res = p.map_async(class_pars_fn, args, chunksize=1)
-
         p.map_async(class_pars_fn, enumerate(sample_folders))
-        print("exit pool")
-    p.close()
-    p.join()
-    #res.get()
-
+        p.close()
+        p.join()
 
 
