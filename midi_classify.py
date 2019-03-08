@@ -3,7 +3,10 @@ from multiprocessing import Pool, cpu_count
 from glob import glob
 from pickle import dump, HIGHEST_PROTOCOL
 
+from itertools import permutations
+
 from music21 import *
+from music21.stream import Score
 
 
 """     Info:
@@ -12,9 +15,8 @@ from music21 import *
 """
 
 
-
 MAX_OCTAVE = 7
-MAX_SUSTAIN = 3     # x 16th notes.
+MAX_SUSTAIN = 8     # x 16th notes.
 MAX_VELOCITY = 127
 
 
@@ -54,28 +56,39 @@ empty_vec = [0 for _ in range(len(note_reverse_dict))]
 
 
 def preproc_raw_file(raw_file):
-    sample = converter.parse(raw_file)
-    parts = instrument.partitionByInstrument(sample)
+    # try:
+        sample = converter.parse(raw_file)
+        parts = analyze_parts(sample, raw_file)
 
-    parts_preproced = []
-    for part in parts:
+        parts_preproced = []
+        if parts:
+            for part in parts:
+                part_preproced = []
+                for element in part.flat.elements:
+                    element_preproced = vectorize_element(element)
+                    if element_preproced is not None:
+                        part_preproced.append(element_preproced)
+                if len(part_preproced) != 0:
+                    parts_preproced.extend(split_part(part_preproced))
+
         part_preproced = []
-        for element in part.flat.elements:
-            element_preproced = vectorize_element(element)
-            if element_preproced[0] is not None:
-                part_preproced.append(element_preproced)
-        if len(part_preproced) != 0:
+        for element in sample.flat.elements:
+            vector = vectorize_element(element)
+            if vector:
+                part_preproced.append(vector)
+        if len(part_preproced):
             parts_preproced.extend(split_part(part_preproced))
 
-    part_preproced = []
-    for element in sample.flat.elements:
-        element_preproced = vectorize_element(element)
-        if element_preproced[0] is not None:
-            part_preproced.append(element_preproced)
-    if len(part_preproced) != 0:
-        parts_preproced.extend(split_part(part_preproced))
+        return parts_preproced
 
-    return parts_preproced
+    # except Exception as e: print(f"! Bad file: {raw_file}: {e}") if verbose else None
+
+
+def analyze_parts(sample, filename):
+    # try:
+        parts = instrument.partitionByInstrument(sample)
+        return [(Score(part)).flat.elements for part in permutations(parts)]
+    # except Exception as e: print(f"! Bad file: {filename} {e}") if verbose else []
 
 
 def vectorize_element(element):
@@ -118,7 +131,7 @@ def vectorize_element(element):
 
         vocab_sum = sum(vocab_vect)
 
-        if vocab_sum == 0: return None, None, None, None
+        if vocab_sum == 0: return None
 
         if vocab_sum != 1: vocab_vect = [round(float(e / vocab_sum), 3) for e in vocab_vect]
         oct_vect = [e / MAX_OCTAVE for e in oct_vect]
@@ -126,9 +139,15 @@ def vectorize_element(element):
         vol_vect = [e / MAX_VELOCITY for e in vol_vect]
 
     except Exception as e:
-        # if print_exceptions: print(f'Catch : Element {element} : {e}')
-        return None, None, None, None
-    return vocab_vect, oct_vect, dur_vect, vol_vect
+        # if verbose: print(f'Catch : Element {element} : {e}')
+        return None
+
+    vect = []
+    vect.extend(vocab_vect)
+    vect.extend(oct_vect)
+    vect.extend(dur_vect)
+    vect.extend(vol_vect)
+    return vect
 
 
 def split_part(part_preproced):
@@ -136,7 +155,8 @@ def split_part(part_preproced):
 
     container = []
     for element in part_preproced:
-        if max(element[2]) > MAX_SUSTAIN*3/4:
+        durations = element[int(len(element)*1/2):int(len(element)*3/4)]
+        if max(durations) > MAX_SUSTAIN*1/2:
             samples.append(container)
             container = []
         else:
@@ -194,26 +214,37 @@ def class_pars_fn(args):
     samples = glob(folder+"*.mid")
     class_data = []
     label = [0 if _ != i else 1 for _ in range(hm_classes)]
-    if verbose: print(f"class {i}: found {len(samples)} samples.")
+    if verbose: print(f"class {i+1} : {folder} {len(samples)} files.")
     for raw_file in samples:
-        if verbose: print(f"> working on: {raw_file}")
+        # if verbose: print(f"> working on: {raw_file}")
         samples = preproc_raw_file(raw_file)
-        for sample in samples:
-            class_data.append([sample, label])
+        if samples:
+            for sample in samples:
+                class_data.append([sample, label])
+
 
     pickle_save(class_data, f"class{i+1}.pkl")
-    if verbose: print(f"class {i}: obtained {len(class_data)} datas.")
+    with open(f'class{i+1}.txt', 'w+') as f:
+        for (seq,lbl) in class_data:
+            for e in lbl:
+                f.write(str(e) + " ")
+            f.write("\n")
+            for t in seq:
+                for e in t:
+                    f.write(str(e) + " ")
+                f.write("\n")
+            f.write("\n;\n")
+    if verbose: print(f"class {i+1}: obtained {len(class_data)} samples.")
 
 
-verbose = False
+verbose = True
+sample_folders = glob("samples/*/")
+hm_classes = len(sample_folders)
+
 if __name__ == '__main__':
 
-    sample_folders = glob("samples/*/")     # todo : make this in-arg.
-    hm_classes = len(sample_folders)
-
     with Pool(cpu_count()) as p:
-        p.map_async(class_pars_fn, enumerate(sample_folders))
+        _ = p.map_async(class_pars_fn, enumerate(sample_folders))
         p.close()
         p.join()
-
-
+        _.get()
