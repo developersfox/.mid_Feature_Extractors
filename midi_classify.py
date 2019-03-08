@@ -214,20 +214,12 @@ def class_pars_fn(args):
     class_data = []
     label = [0 if _ != i else 1 for _ in range(hm_classes)]
     if verbose: print(f"class {i+1} : {folder} {len(samples)} files.")
-    with Pool(cpu_count()) as p:
-        results = p.map_async(preproc_raw_file, samples)
-        p.close()
-        p.join()
-        for res in results.get():
-            if res:
-                for sample in res:
-                    class_data.append([sample, label])
-    # for raw_file in samples:
-    #     # if verbose: print(f"> working on: {raw_file}")
-    #     samples = preproc_raw_file(raw_file)
-    #     if samples:
-    #         for sample in samples:
-    #             class_data.append([sample, label])
+    for raw_file in samples:
+        # if verbose: print(f"> working on: {raw_file}")
+        samples = preproc_raw_file(raw_file)
+        if samples:
+            for sample in samples:
+                class_data.append([sample, label])
 
 
     pickle_save(class_data, f"class{i+1}.pkl")
@@ -251,8 +243,7 @@ hm_classes = len(sample_folders)
 if __name__ == '__main__':
 
     with Pool(cpu_count()) as p:
-        [class_pars_fn(e) for e in enumerate(sample_folders)]
-        # _ = p.map_async(class_pars_fn, enumerate(sample_folders))
-        # p.close()
-        # p.join()
-        # _.get()
+        _ = p.map_async(class_pars_fn, enumerate(sample_folders))
+        p.close()
+        p.join()
+        _.get()
