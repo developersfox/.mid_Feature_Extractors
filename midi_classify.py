@@ -58,18 +58,17 @@ empty_vec = [0 for _ in range(len(note_reverse_dict))]
 def preproc_raw_file(raw_file):
     # try:
         sample = converter.parse(raw_file)
-        parts = analyze_parts(sample, raw_file)
+        parts = analyze_parts(sample)
 
         parts_preproced = []
-        if parts:
-            for part in parts:
-                part_preproced = []
-                for element in part.flat.elements:
-                    element_preproced = vectorize_element(element)
-                    if element_preproced is not None:
-                        part_preproced.append(element_preproced)
-                if len(part_preproced) != 0:
-                    parts_preproced.extend(split_part(part_preproced))
+        for part in parts:
+            part_preproced = []
+            for element in part.flat.elements:
+                element_preproced = vectorize_element(element)
+                if element_preproced is not None:
+                    part_preproced.append(element_preproced)
+            if len(part_preproced) != 0:
+                parts_preproced.extend(split_part(part_preproced))
 
         part_preproced = []
         for element in sample.flat.elements:
@@ -84,10 +83,10 @@ def preproc_raw_file(raw_file):
     # except Exception as e: print(f"! Bad file: {raw_file}: {e}") if verbose else None
 
 
-def analyze_parts(sample, filename):
+def analyze_parts(sample):
     # try:
-        parts = instrument.partitionByInstrument(sample)
-        return [(Score(part)).flat.elements for part in permutations(parts)]
+        all_parts = instrument.partitionByInstrument(sample)
+        return [(Score(parts)) for parts in permutations(all_parts)]
     # except Exception as e: print(f"! Bad file: {filename} {e}") if verbose else []
 
 
