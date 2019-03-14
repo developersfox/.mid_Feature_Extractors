@@ -1,9 +1,10 @@
 from multiprocessing import Pool, cpu_count
+import gc
 
 from glob import glob
 from pickle import dump, HIGHEST_PROTOCOL
 
-from itertools import permutations
+from itertools import combinations
 
 from music21 import *
 from music21.stream import Score
@@ -14,9 +15,11 @@ from music21.stream import Score
             usage: arrange sample files as /samples/<album_name>/<song_name>.mid
 """
 
+batch_size_per_class = -99
+
 
 MAX_OCTAVE = 7
-MAX_SUSTAIN = 8     # x 16th notes.
+MAX_SUSTAIN = 32     # x 16th notes.
 MAX_VELOCITY = 127
 
 
@@ -57,7 +60,7 @@ empty_vec = [0 for _ in range(len(note_reverse_dict))]
 
 def preproc_raw_file(raw_file):
     # try:
-        if verbose: print(f"working on: {raw_file}")
+        if verbose: print("working on:",raw_file)
         sample = converter.parse(raw_file)
         parts = analyze_parts(sample)
 
@@ -68,26 +71,27 @@ def preproc_raw_file(raw_file):
                 element_preproced = vectorize_element(element)
                 if element_preproced is not None:
                     part_preproced.append(element_preproced)
-            if len(part_preproced) != 0:
-                parts_preproced.extend(split_part(part_preproced))
-
-        part_preproced = []
-        for element in sample.flat.elements:
-            vector = vectorize_element(element)
-            if vector:
-                part_preproced.append(vector)
-        if len(part_preproced):
-            parts_preproced.extend(split_part(part_preproced))
+            parts_preproced.append(split_part(part_preproced))
 
         return parts_preproced
 
-    # except Exception as e: print(f"! Bad file: {raw_file}: {e}") if verbose else None
+    # except Exception as e: print(f"! Failed on file: {raw_file}: {e}") if verbose else None
 
 
 def analyze_parts(sample):
-    # try:
-        all_parts = instrument.partitionByInstrument(sample)
-        return [(Score(parts)) for parts in permutations(all_parts)]
+    try:
+        partitions = instrument.partitionByInstrument(sample)
+        if partitions is None:
+            partitions = sample
+
+        if 1 < len(partitions) <= 3:
+            parted = []
+            for i in range(len(partitions)):
+                comb = combinations(partitions, i+1)
+                parted.extend([Score(c) for c in comb])
+            return parted
+        else: return partitions
+    except: print('bad file.')
     # except Exception as e: print(f"! Bad file: {filename} {e}") if verbose else []
 
 
@@ -150,13 +154,15 @@ def vectorize_element(element):
     return vect
 
 
+def hasValid_duration(element): return 0.0 < float(element.duration.quarterLength) <= MAX_SUSTAIN
+
+
 def split_part(part_preproced):
     samples = []
 
     container = []
     for element in part_preproced:
-        durations = element[int(len(element)*1/2):int(len(element)*3/4)]
-        if max(durations) > MAX_SUSTAIN*1/2:
+        if max(element[int(len(element)*2/4):int(len(element)*3/4)-1]) > MAX_SUSTAIN*3/4:
             samples.append(container)
             container = []
         else:
@@ -165,9 +171,6 @@ def split_part(part_preproced):
     if container != []: samples.append(container)
 
     return samples
-
-
-def hasValid_duration(element): return 0.0 < float(element.duration.quarterLength) <= MAX_SUSTAIN
 
 
 
@@ -212,37 +215,46 @@ class MacOSFile(object):
 def class_pars_fn(args):
     i, folder = args
     samples = glob(folder+"*.mid")
-    class_data = []
     label = [0 if _ != i else 1 for _ in range(hm_classes)]
-    if verbose: print(f"class {i+1} : {folder} {len(samples)} files.")
-    with Pool(cpu_count()) as p:
-        results = p.map_async(preproc_raw_file, samples)
-        p.close()
-        p.join()
-        for res in results.get():
-            if res:
-                for sample in res:
-                    class_data.append([sample, label])
-    # for raw_file in samples:
-    #     # if verbose: print(f"> working on: {raw_file}")
-    #     samples = preproc_raw_file(raw_file)
-    #     if samples:
-    #         for sample in samples:
-    #             class_data.append([sample, label])
+
+    if verbose: print("class", i+1, ":",folder, len(samples), "files.")
+
+    if batch_size_per_class != -99:
+        batches = [samples[i*batch_size_per_class:(i+1)*batch_size_per_class] for i in range(int(len(samples)/batch_size_per_class))]
+        if len(samples)%batch_size_per_class != 0: batches.append(samples[-len(samples)%batch_size_per_class:])
+    else:
+        batches = [samples]
+
+    for ii,batch in enumerate(batches):
+
+        batch_data = []
+        gc.collect()
+
+        with Pool(cpu_count()) as p:
+            results = p.map_async(preproc_raw_file, batch)
+            p.close()
+            p.join()
+            for res in results.get():
+                if res:
+                    for samples in res:
+                        for sample in samples:
+                            batch_data.append([sample, label])
+
+        # pickle_save(batch_data, f"class{i+1}.{ii+1}.pkl")
+        with open(f'class{i+1}.{ii+1}.txt', 'w+') as f:
+            for (seq,lbl) in batch_data:
+                # for e in lbl:
+                #     f.write(str(e) + " ")
+                # f.write("\n")
+                for t in seq:
+                    for e in t:
+                        f.write(str(e) + " ")
+                    f.write("\n")
+                f.write(";\n")
+                # f.write("\n;\n")
+        if verbose: print("class",i+1,": obtained",len(batch_data),"samples.")
 
 
-    pickle_save(class_data, f"class{i+1}.pkl")
-    with open(f'class{i+1}.txt', 'w+') as f:
-        for (seq,lbl) in class_data:
-            for e in lbl:
-                f.write(str(e) + " ")
-            f.write("\n")
-            for t in seq:
-                for e in t:
-                    f.write(str(e) + " ")
-                f.write("\n")
-            f.write("\n;\n")
-    if verbose: print(f"class {i+1}: obtained {len(class_data)} samples.")
 
 
 verbose = True
@@ -257,3 +269,4 @@ if __name__ == '__main__':
         # p.close()
         # p.join()
         # _.get()
+        input("Completed. Hit enter to quit")
