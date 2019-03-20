@@ -1,13 +1,9 @@
 from multiprocessing import Pool, cpu_count
-import gc
 
 from glob import glob
 from pickle import dump, HIGHEST_PROTOCOL
 
-from itertools import combinations
-
 from music21 import *
-from music21.stream import Score
 
 
 """     Info:
@@ -15,14 +11,11 @@ from music21.stream import Score
             usage: arrange sample files as /samples/<album_name>/<song_name>.mid
 """
 
-batch_size_per_class = -99
 
 
 MAX_OCTAVE = 7
-MAX_SUSTAIN = 16     # x 16th notes.
+MAX_SUSTAIN = 3     # x 16th notes.
 MAX_VELOCITY = 127
-
-duration_split = 0.75
 
 
 note_dict = {
@@ -61,38 +54,28 @@ empty_vec = [0 for _ in range(len(note_reverse_dict))]
 
 
 def preproc_raw_file(raw_file):
-    try:
-        if verbose: print("working on:",raw_file)
-        sample = converter.parse(raw_file)
-        parts = analyze_parts(sample)
+    sample = converter.parse(raw_file)
+    parts = instrument.partitionByInstrument(sample)
 
-        parts_preproced = []
-        for part in parts:
-            part_preproced = []
-            for element in part.flat.elements:
-                element_preproced = vectorize_element(element)
-                if element_preproced is not None:
-                    part_preproced.append(element_preproced)
-            parts_preproced.append(split_part(part_preproced))
+    parts_preproced = []
+    for part in parts:
+        part_preproced = []
+        for element in part.flat.elements:
+            element_preproced = vectorize_element(element)
+            if element_preproced[0] is not None:
+                part_preproced.append(element_preproced)
+        if len(part_preproced) != 0:
+            parts_preproced.extend(split_part(part_preproced))
 
-        return parts_preproced
+    part_preproced = []
+    for element in sample.flat.elements:
+        element_preproced = vectorize_element(element)
+        if element_preproced[0] is not None:
+            part_preproced.append(element_preproced)
+    if len(part_preproced) != 0:
+        parts_preproced.extend(split_part(part_preproced))
 
-    except Exception as e: print(f"! Failed on file: {raw_file}: {e}") if verbose else None
-
-
-def analyze_parts(sample):
-    partitions = instrument.partitionByInstrument(sample)
-    if partitions is None:
-        partitions = sample
-
-    parted = []
-    if len(partitions) <= 5:
-        for i in range(len(partitions)):
-            comb = combinations(partitions, i + 1)
-            parted.extend([Score(c) for c in comb])
-
-        return parted
-    else: return [partitions]
+    return parts_preproced
 
 
 def vectorize_element(element):
@@ -135,7 +118,7 @@ def vectorize_element(element):
 
         vocab_sum = sum(vocab_vect)
 
-        if vocab_sum == 0: return None
+        if vocab_sum == 0: return None, None, None, None
 
         if vocab_sum != 1: vocab_vect = [round(float(e / vocab_sum), 3) for e in vocab_vect]
         oct_vect = [e / MAX_OCTAVE for e in oct_vect]
@@ -143,18 +126,9 @@ def vectorize_element(element):
         vol_vect = [e / MAX_VELOCITY for e in vol_vect]
 
     except Exception as e:
-        # if verbose: print(f'Catch : Element {element} : {e}')
-        return None
-
-    vect = []
-    vect.extend(vocab_vect)
-    vect.extend(oct_vect)
-    vect.extend(dur_vect)
-    vect.extend(vol_vect)
-    return vect
-
-
-def hasValid_duration(element): return 0.0 < float(element.duration.quarterLength) <= MAX_SUSTAIN
+        # if print_exceptions: print(f'Catch : Element {element} : {e}')
+        return None, None, None, None
+    return vocab_vect, oct_vect, dur_vect, vol_vect
 
 
 def split_part(part_preproced):
@@ -162,16 +136,18 @@ def split_part(part_preproced):
 
     container = []
     for element in part_preproced:
-        if max(element[int(len(element)*2/4):int(len(element)*3/4)]) >= duration_split:
-            if len(container) >= 2:
-                samples.append(container)
-                container = []
+        if max(element[2]) > MAX_SUSTAIN*3/4:
+            samples.append(container)
+            container = []
         else:
             container.append(element)
 
     if container != []: samples.append(container)
 
     return samples
+
+
+def hasValid_duration(element): return 0.0 < float(element.duration.quarterLength) <= MAX_SUSTAIN
 
 
 
@@ -216,58 +192,28 @@ class MacOSFile(object):
 def class_pars_fn(args):
     i, folder = args
     samples = glob(folder+"*.mid")
+    class_data = []
     label = [0 if _ != i else 1 for _ in range(hm_classes)]
+    if verbose: print(f"class {i}: found {len(samples)} samples.")
+    for raw_file in samples:
+        if verbose: print(f"> working on: {raw_file}")
+        samples = preproc_raw_file(raw_file)
+        for sample in samples:
+            class_data.append([sample, label])
 
-    if verbose: print("class", i+1, ":",folder, len(samples), "files.")
-
-    if batch_size_per_class != -99:
-        batches = [samples[i*batch_size_per_class:(i+1)*batch_size_per_class] for i in range(int(len(samples)/batch_size_per_class))]
-        if len(samples)%batch_size_per_class != 0: batches.append(samples[-len(samples)%batch_size_per_class:])
-    else:
-        batches = [samples]
-
-    for ii,batch in enumerate(batches):
-
-        batch_data = []
-        gc.collect()
-
-        with Pool(cpu_count()) as p:
-            results = p.map_async(preproc_raw_file, batch)
-            p.close()
-            p.join()
-            for res in results.get():
-                if res:
-                    for samples in res:
-                        for sample in samples:
-                            batch_data.append([sample, label])
-
-        pickle_save(batch_data, f"class{i+1}.{ii+1}.pkl")
-        # with open(f'class{i+1}.{ii+1}.txt', 'w+') as f:
-        #     for (seq,lbl) in batch_data:
-        #         # for e in lbl:
-        #         #     f.write(str(e) + " ")
-        #         # f.write("\n")
-        #         for t in seq:
-        #             for e in t:
-        #                 f.write(str(e) + " ")
-        #             f.write("\n")
-        #         f.write(";\n")
-                # f.write("\n;\n")
-        if verbose: print("class",i+1,": obtained",len(batch_data),"samples.")
-
-
+    pickle_save(class_data, f"class{i+1}.pkl")
+    if verbose: print(f"class {i}: obtained {len(class_data)} datas.")
 
 
 verbose = True
-sample_folders = glob("samples/*/")
-hm_classes = len(sample_folders)
-
 if __name__ == '__main__':
 
-    # with Pool(cpu_count()) as p:
-        [class_pars_fn(e) for e in enumerate(sample_folders)]
-        # _ = p.map_async(class_pars_fn, enumerate(sample_folders))
-        # p.close()
-        # p.join()
-        # _.get()
-        input("Completed. Hit enter to quit")
+    sample_folders = glob("samples/*/")     # todo : make this in-arg.
+    hm_classes = len(sample_folders)
+
+    with Pool(cpu_count()) as p:
+        p.map_async(class_pars_fn, enumerate(sample_folders))
+        p.close()
+        p.join()
+
+
